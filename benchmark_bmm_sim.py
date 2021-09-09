@@ -42,6 +42,8 @@ o_size = [int(o) for o in options.out_]
 i_size = i_size * options.n
 o_size = o_size * options.n
 assert(len(i_size) == len(o_size))
+options.n = len(i_size)
+print('=== n: %d ===' % options.n)
 # r_size = [100 400]
 # r_size = [8]
 A = []
