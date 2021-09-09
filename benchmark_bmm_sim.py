@@ -19,6 +19,7 @@ parser.add_argument('-n', '--n', type=int, default=1)
 parser.add_argument('-m', '--mode', type=str, default='all')
 parser.add_argument('-p', '--pytorch', type=str, default='true')
 parser.add_argument('-v', '--debug', type=str, default='false')
+parser.add_argument('-tran', '--tran', type=int, default=0)
 parser.add_argument('-i', '--in_', nargs='+', default=[32, 64, 128, 256, 512])
 parser.add_argument('-o', '--out_', nargs='+', default=[32, 64, 128, 256, 512])
 options = parser.parse_args()
@@ -36,7 +37,7 @@ kwargs = {'dtype': dtype,
           'device': device,
           'requires_grad': False}
 
-# generate "n" random matrix with different #columns
+# generate "n" set of random matrix with given dims
 i_size = [int(i) for i in options.in_]
 o_size = [int(o) for o in options.out_]
 i_size = i_size * options.n
@@ -53,7 +54,7 @@ C = []
 mshapes = []
 nshapes = []
 kshapes = []
-# index = torch.randint(0, len(i_size), (options.n,))
+# index = torch.randint(0, len(r_size), (options.n,))
 
 
 sum_size_A = 0
@@ -61,19 +62,48 @@ sum_size_B = 0
 sum_size_C = 0
 C_true=[]
 for i in range(len(i_size)):
-    A_s = torch.randn(options.batch_size, i_size[i], **kwargs)
-    B_s = torch.randn(i_size[i], o_size[i] , **kwargs)
-    C_s = torch.zeros(options.batch_size, o_size[i] , **kwargs)
 
-    C_true.append(torch.matmul(A_s, B_s))
+    if options.tran == 0: # A * B
+        A_s = torch.randn(options.batch_size, i_size[i], **kwargs)
+        B_s = torch.randn(i_size[i], o_size[i], **kwargs)
+        C_s = torch.zeros(options.batch_size, o_size[i], **kwargs)
+        C_true.append(torch.matmul(A_s, B_s))
+        mshapes.append(A_s.shape[0])
+        nshapes.append(B_s.shape[1])
+        kshapes.append(A_s.shape[1])
+    elif options.tran == 1: # A * B^T
+        A_s = torch.randn(options.batch_size, i_size[i], **kwargs)
+        B_s = torch.randn(o_size[i], i_size[i] , **kwargs)
+        C_s = torch.zeros(options.batch_size, o_size[i], **kwargs)
+        C_true.append(torch.matmul(A_s, B_s.t()))
+        mshapes.append(A_s.shape[0])
+        nshapes.append(B_s.shape[0])
+        kshapes.append(A_s.shape[1])
+    elif options.tran == 2: # A^T * B
+        A_s = torch.randn(i_size[i], options.batch_size,  **kwargs)
+        B_s = torch.randn(i_size[i], o_size[i], **kwargs)
+        C_s = torch.zeros(options.batch_size, o_size[i], **kwargs)
+        C_true.append(torch.matmul(A_s.t(), B_s))
+        mshapes.append(A_s.shape[1])
+        nshapes.append(B_s.shape[1])
+        kshapes.append(A_s.shape[0])
+    elif options.tran == 3: # A^T * B^T
+        A_s = torch.randn(i_size[i], options.batch_size,  **kwargs)
+        B_s = torch.randn(o_size[i], i_size[i], **kwargs)
+        C_s = torch.zeros(options.batch_size, o_size[i], **kwargs)
+        C_true.append(torch.matmul(A_s.t(), B_s.t()))
+        mshapes.append(A_s.shape[1])
+        nshapes.append(B_s.shape[0])
+        kshapes.append(A_s.shape[0])
+
+
 
     A.append(A_s)
     B.append(B_s)
     C.append(C_s)
+    
 
-    mshapes.append(A_s.shape[0])
-    nshapes.append(B_s.shape[1])
-    kshapes.append(A_s.shape[1])
+    
 
     sum_size_A = sum_size_A + A_s.numel()
     sum_size_B = sum_size_B + B_s.numel()
@@ -136,7 +166,14 @@ if options.pytorch == 'true':
         for i in range(options.n):
             torch.cuda.synchronize()
             start = time.time()
-            C_s_true = torch.matmul(A[i], B[i])
+            if options.tran == 0:
+                C_s_true = torch.matmul(A[i], B[i])
+            elif options.tran ==1:
+                C_s_true = torch.matmul(A[i], B[i].t())
+            elif options.tran ==2:
+                C_s_true = torch.matmul(A[i].t(), B[i])
+            elif options.tran ==3:
+                C_s_true = torch.matmul(A[i].t(), B[i].t())
             torch.cuda.synchronize()
             elapsed = time.time() - start
             pytorch_time += elapsed
@@ -144,6 +181,18 @@ if options.pytorch == 'true':
     
 torch.cuda.synchronize()
 
+if options.tran == 0:
+    A_T = False
+    B_T = False
+elif options.tran == 1:
+    A_T = False
+    B_T = True
+elif options.tran == 2:
+    A_T = True
+    B_T = False
+elif options.tran == 3:
+    A_T = True
+    B_T = True
 
 cublas_time = 0
 if options.mode == 'cublas' or options.mode == 'all':
@@ -151,7 +200,7 @@ if options.mode == 'cublas' or options.mode == 'all':
     for j in range(options.runs):
         torch.cuda.synchronize()
         start = time.time()
-        result = Mul.CublasForward(A_con, B_con, C_con, m_arr, n_arr, k_arr, options.n, all_offset_A, all_offset_B, all_offset_C)
+        result = Mul.CublasForward(A_con, B_con, C_con, m_arr, n_arr, k_arr, options.n, all_offset_A, all_offset_B, all_offset_C, A_T, B_T)
         torch.cuda.synchronize()
         elapsed = time.time() - start
         cublas_time += elapsed
@@ -177,8 +226,10 @@ for k in range(options.n):
     if not torch.allclose(C_, C_true[k]) and options.debug == 'true':
         print('A:', A[k])
         print('B:', B[k])
-        print("C True: L2 and Fro norms are: %s and %s" % (torch.linalg.norm(C_, ord=2), torch.linalg.norm(C_, ord='fro')))
-        print('C Comp: L2 and Fro norms are: %s and %s' % (torch.linalg.norm(C_true[k], ord=2), torch.linalg.norm(C_true[k], ord='fro')))
+        print('C True:', C_true[k])
+        print('C Comp:', C_)
+        print("C Comp: L2 and Fro norms are: %s and %s" % (torch.linalg.norm(C_, ord=2), torch.linalg.norm(C_, ord='fro')))
+        print('C True: L2 and Fro norms are: %s and %s' % (torch.linalg.norm(C_true[k], ord=2), torch.linalg.norm(C_true[k], ord='fro')))
         print('matmul error w.r.t pytorch:', C_-C_true[k])
 print('#'*20)
         
@@ -192,5 +243,4 @@ magma_average = magma_time / options.runs * scale
 print('PyTorch: {0:.3f} {3} | cublas {1:.3f} {3} | magma {2:.3f} {3}'.format(
      pytorch_average,  cublas_average, magma_average,
     options.scale))
-
 
